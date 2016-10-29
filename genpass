@@ -1,0 +1,148 @@
+#!/usr/bin/python3
+import math
+import sys
+import argparse
+import re
+
+# TODO: Possible expressions should include the following.  Basically different
+#       units of data.
+#        10^3 -> 2^(3*log(2, 10))
+#        3b   -> 2^3
+#        3B   -> 8^3
+#        ^5   -> (same as len(alphabet)^5)
+
+def parse_entropy(alphabetLen, s):
+    pieces = s.split('|')
+    values = []
+
+    for piece in s.split('|'):
+        m = re.match(r'^(\d+)\^(\d+)$', piece)
+        if m:
+            base = float(m.group(1))
+            exponent = float(m.group(2))
+
+            values.append(exponent * math.log(base, 256))
+            continue
+
+        m = re.match(r'^\^(\d+)$', piece)
+        if m:
+            exponent = float(m.group(1))
+
+            values.append(exponent * math.log(alphabetLen, 256))
+            continue
+
+        m = re.match(r'^(\d+)([bBde])$', piece)
+        if m:
+            value = float(m.group(1))
+            unit = m.group(2)
+
+            if unit == 'b':
+                values.append(value / 8)
+            elif unit == 'B':
+                values.append(value)
+            elif unit == 'd':
+                values.append(value * math.log(10, 256))
+            elif unitlast == 'e':
+                values.append(value * math.log(math.e, 256))
+            else:
+                raise Exception('Could not understand unit %r' % unit)
+
+            continue
+
+        raise Exception('Could not understand entropy value %r' % piece)
+
+    return math.ceil(max(values))
+
+def words():
+    with open('words.txt') as f:
+        for line in f:
+            word = line.strip()
+
+            if word.isalpha():
+                yield word.lower()
+
+alpha = 'abcdefghijklmnopqrstuvwxyz'
+digits = '0123456789'
+punct = '`~!@#$%^&*()-_=+[]{}|;:<>,./?'
+unclear = '0oOl1I'
+right_hand = 'yuiophjklnm'
+left_hand = 'qwertasdfgzxcvb'
+
+def clarify(string):
+    return string.translate({ord(k): None for k in unclear})
+
+def only_use(words, allowed):
+    for word in words:
+        if all(c in allowed for c in word):
+            yield word
+
+alphabets = {
+    'alpha': lambda: alpha.lower() + alpha.upper(),
+    'alpha-lower': lambda: alpha.lower(),
+    'alphanum-lower': lambda: alpha.lower() + digits,
+    'alphanum': lambda: alpha.lower() + alpha.upper() + digits,
+    'alphanum-clear': lambda: clarify(
+        alpha.lower() + alpha.upper() + digits
+    ),
+    'printable': lambda: (
+        alpha.lower() + alpha.upper() + digits + punct
+    ),
+    'printable-clear': lambda: clarify(
+        alpha.lower() + alpha.upper() + digits + punct
+    ),
+    'words': words,
+    'right-hand': lambda: right_hand,
+    'right-hand-words': lambda: only_use(words(), right_hand),
+}
+
+def collect_entropy(entropy_bytes):
+    with open('/dev/urandom', 'rb') as f:
+        return int.from_bytes(f.read(entropy_bytes), byteorder='little')
+
+def generate(value, alphabet):
+    symbols = []
+
+    while value > 0:
+        value, remainder = value // len(alphabet), value % len(alphabet)
+        symbols.append(alphabet[remainder])
+
+    return symbols
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate strongly random strings.')
+    parser.add_argument('--alphabet', choices=alphabets.keys())
+    parser.add_argument('--separator')
+    parser.add_argument('--entropy', default='33b', help='The amount of entropy to use (ex. 10^3, 100, 10b, 10B, 5d, 3e, ^7')
+    parser.add_argument('preset', nargs='?')
+    args = parser.parse_args()
+
+    if args.preset == 'word-num':
+        args.alphabet = args.alphabet or 'alphanum-lower'
+        args.separator = args.separator or ''
+    elif args.preset == 'rh-word':
+        args.alphabet = args.alphabet or 'alphanum-lower'
+        args.separator = args.separator or ''
+    elif args.preset == 'pin':
+        args.alphabet = args.alphabet or 'right-hand'
+        args.separator = args.separator or ''
+    elif args.preset is None:
+        args.alphabet = args.alphabet or 'alphanum-clear'
+        args.separator = args.separator or ''
+    else:
+        print('No such preset %r' % args.preset)
+        sys.exit(1)
+
+    alphabet = alphabets[args.alphabet]()
+
+    if not isinstance(alphabet, list):
+        alphabet = list(alphabet)
+
+    entropy_bytes = parse_entropy(len(alphabet), args.entropy)
+    value = collect_entropy(entropy_bytes)
+
+    print('Using %d bits of entropy' % (entropy_bytes*8), file=sys.stderr)
+
+    symbols = generate(value, alphabet)
+
+    print(args.separator.join(symbols))
+
